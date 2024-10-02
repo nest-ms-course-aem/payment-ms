@@ -1,14 +1,21 @@
 import Stripe from 'stripe';
 
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { envs } from 'src/config/envs';
 import { PaymentSessionDto } from './dto/create-session.dto';
 import { Request, Response } from 'express';
+import { NATS_SERVICE } from 'src/config/service';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class PaymentsService {
 
     private readonly stripeClient = new Stripe(envs.secretApiKey);
+    private readonly logger = new Logger('PaymentsService');
+
+    constructor(
+        @Inject(NATS_SERVICE) private readonly natsClient: ClientProxy,
+    ){}
 
     async createPaymentSession(paymentSessionDto: PaymentSessionDto) {
 
@@ -35,7 +42,11 @@ export class PaymentsService {
             success_url: envs.succesUrl,
             cancel_url: envs.cancelUrl,
         });
-        return createSession;
+        return {
+            cancelUrl: createSession.cancel_url,
+            successUrl: createSession.success_url,
+            url: createSession.url,
+        };
     }
 
     handleWebhook(req: Request, res: Response) {
@@ -56,16 +67,20 @@ export class PaymentsService {
         switch (event?.type) {
             case 'charge.succeeded':
                 const paymentIntent = event.data.object;
-                console.log('PaymentIntent was successful!', {
-                    metadata: {
-                        orderId: paymentIntent.metadata
-                    }
-                });
+                const payload = {
+                    orderId: paymentIntent.metadata.orderId,
+                    stripePaymentId: paymentIntent.id,
+                    receiptUrl: paymentIntent.receipt_url,
+                };
+
+                this.natsClient.emit('payment.succeeded', payload);
+                this.logger.log({payload})
+
                 break;
             default:
                 console.log(`Unhandled event type ${event.type}`);
         }
-        // console.log({ event }); 
+        console.log({ event }); 
         //Because of the raw evidence
         return res.status(201).json({ signature })
     }
