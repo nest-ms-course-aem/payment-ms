@@ -1,0 +1,46 @@
+#Dependencies 
+# multi stage build
+FROM node:21-alpine3.19 as deps 
+
+WORKDIR /usr/src/app
+
+# this * includes the lock
+COPY package*.json ./ 
+
+RUN yarn install
+
+
+
+# App Builder 
+FROM node:21-alpine3.19 as build 
+
+WORKDIR /usr/src/app
+
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+
+COPY . .
+
+RUN yarn build
+
+# Only prod deps and clean cache
+RUN yarn install --frozen-lockfile --production && yarn cache clean
+
+
+# Create final image
+
+FROM node:21-alpine3.19 as prod 
+
+WORKDIR /usr/src/app
+
+COPY --from=build /usr/src/app/node_modules ./node_modules
+
+COPY --from=build /usr/src/app/dist ./dist
+
+ENV NODE_ENV=production
+
+# Create user to avoid using super root account admin
+USER node 
+
+EXPOSE 3000
+
+CMD [ "node", "dist/main.js" ]
